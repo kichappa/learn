@@ -1,0 +1,14 @@
+{
+  "name": "learn",
+  "description": "The learn plugin: a teaching system for Claude Code.",
+  "owner": {
+    "name": "kichappa"
+  },
+  "plugins": [
+    {
+      "name": "learn",
+      "source": "./",
+      "description": "Probe, plan and teach with graded quizzes, verified diagrams, and an adaptive learner profile."
+    }
+  ]
+}
