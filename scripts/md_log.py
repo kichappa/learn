@@ -44,6 +44,7 @@ import os
 import random
 import re
 import sys
+import time
 from pathlib import Path
 
 def find_project(explicit: str | None = None) -> Path:
@@ -83,7 +84,53 @@ WIKI_EMBED = re.compile(r"!\[\[([^\]|]+?\.(?:png|jpe?g|gif|svg|webp))(?:\|(\d+))
 # ── quiz helpers ─────────────────────────────────────────────────────────────
 
 def is_quiz(q: dict) -> bool:
+    """Graded question: "Quiz N" checks taught material, "Probe N" tests prior knowledge."""
+    return str(q.get("header", "")).strip().lower().startswith(("quiz", "probe"))
+
+
+def needs_explanation(q: dict) -> bool:
     return str(q.get("header", "")).strip().lower().startswith("quiz")
+
+
+MIN_EXPLANATION_CHARS = 250
+
+
+def visible_text_this_turn(transcript: Path | None, tool_use_id: str) -> int | None:
+    """Characters of lesson prose since the learner last spoke (a prompt or a question
+    answer). Blockquote lines (the grading callout) don't count: they grade the previous
+    quiz, they don't teach the next node.
+
+    The hook can fire before Claude Code has written the current message to the transcript,
+    so wait until the entry holding this tool call appears. If it never does, return None:
+    the caller then lets the quiz through rather than block on a stale file."""
+    if not transcript or not tool_use_id:
+        return None
+    for _ in range(20):  # up to ~4 s
+        if transcript.is_file() and tool_use_id in transcript.read_text(encoding="utf-8", errors="replace"):
+            break
+        time.sleep(0.2)
+    else:
+        return None
+    chars = 0
+    chain = active_chain(load_entries(transcript))
+    # Count back from the message holding this quiz, not from the end of the session
+    here = next((i for i in range(len(chain) - 1, -1, -1) if chain[i].get("type") == "assistant"
+                 and tool_use_id in json.dumps(chain[i].get("message", {}).get("content"))), len(chain) - 1)
+    for e in reversed(chain[:here + 1]):
+        content = e.get("message", {}).get("content")
+        if e.get("type") == "user":
+            if isinstance(content, list) and any(isinstance(b, dict) and b.get("tool_use_id") == tool_use_id
+                                                 for b in content):
+                continue  # this quiz's own answer (present when checking after the fact)
+            answered = isinstance(e.get("toolUseResult"), dict) and "answers" in e["toolUseResult"]
+            if answered or user_prompt(e):
+                break
+            continue
+        if e.get("type") == "assistant" and isinstance(content, list):
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "text":
+                    chars += sum(len(ln) for ln in b["text"].splitlines() if not ln.lstrip().startswith(">"))
+    return chars
 
 
 def prepare_quiz(q: dict) -> dict:
@@ -377,10 +424,21 @@ def render(session_id: str, transcript: Path | None, pending: dict | None = None
     if not stored:
         return 0
     log = resolve_log(stored)
-    transcript = transcript or find_transcript(session_id)
-    chain = active_chain(load_entries(transcript)) if transcript and transcript.is_file() else []
-    pending = pending or {"questions": {}, "results": {}, "prompt": None, "last_assistant": None}
-    blocks = build_blocks(chain, log.parent, pending)
+    empty = {"questions": {}, "results": {}, "prompt": None, "last_assistant": None}
+    # Several sessions can share one log (a lesson continued in a new session): render each
+    # linked session in the order it started, so a new session never overwrites an old one.
+    parts = []
+    for sid in [s for s, p in load_links().items() if resolve_log(p) == log]:
+        t = transcript if sid == session_id and transcript else find_transcript(sid)
+        entries = load_entries(t) if t and t.is_file() else []
+        start = next((e["timestamp"] for e in entries if e.get("timestamp")), "")
+        parts.append((start, sid, active_chain(entries)))
+    parts.sort()
+    blocks: list[str] = []
+    for i, (start, sid, chain) in enumerate(parts):
+        if len(parts) > 1:
+            blocks.append(f"---\n\n> [!info] Session {i + 1} · started {start[:16].replace('T', ' ')} UTC")
+        blocks += build_blocks(chain, log.parent, (pending or empty) if sid == session_id else empty)
     write_log(log, blocks)
     return len(blocks)
 
@@ -398,13 +456,39 @@ def hook() -> None:
     if event == "PreToolUse" and payload.get("tool_name") == QA_TOOL:
         tool_input = payload.get("tool_input") or {}
         qs = tool_input.get("questions") or []
+        # Gate: a check-quiz must come after the lesson text it checks, so the learner (and
+        # the log) have the material. Worded around the lesson, not around how it was drafted.
+        if any(needs_explanation(q) for q in qs):
+            n = visible_text_this_turn(tpath, payload.get("tool_use_id", ""))
+            if n is not None and n < MIN_EXPLANATION_CHARS:
+                sys.stdout.write(json.dumps({"hookSpecificOutput": {
+                    "hookEventName": "PreToolUse", "permissionDecision": "deny",
+                    "permissionDecisionReason": (
+                        "Lesson check: this quiz checks material that isn't in the lesson yet "
+                        f"(about {n} characters of lesson text since the learner's last answer). "
+                        "Add the explanation or worked step for this node to the lesson message, "
+                        "then ask the quiz. For a question on prior knowledge, use the header "
+                        "'Probe N' instead.")}}))
+                return
         if any(is_quiz(q) for q in qs):
             qs = [prepare_quiz(q) if is_quiz(q) else q for q in qs]
             out = {"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                           "updatedInput": {**tool_input, "questions": qs}}}
         pending["questions"][payload.get("tool_use_id", "")] = qs
     elif event == "PostToolUse" and payload.get("tool_name") == QA_TOOL:
-        pending["results"][payload.get("tool_use_id", "")] = payload.get("tool_response")
+        tid = payload.get("tool_use_id", "")
+        pending["results"][tid] = payload.get("tool_response")
+        # After-the-fact lesson check. Before a quiz, the transcript usually doesn't hold the
+        # current message yet, so the gate above can't see it; after the answer, it does.
+        qs = (payload.get("tool_input") or {}).get("questions") or []
+        if any(needs_explanation(q) for q in qs):
+            n = visible_text_this_turn(tpath, tid)
+            if n is not None and n < MIN_EXPLANATION_CHARS:
+                out = {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": (
+                    "Lesson check: the message that asked this quiz had almost no lesson text "
+                    f"(about {n} characters), so the learner answered without the node's explanation "
+                    "in front of them, and the lesson log is missing it too. Start your next message by "
+                    "writing that node's explanation in the lesson, then grade the answer.")}}
     elif event == "UserPromptSubmit":
         pending["prompt"] = payload.get("prompt") or payload.get("user_prompt")
     elif event == "Stop":
@@ -416,6 +500,16 @@ def hook() -> None:
         sys.stdout.flush()
     if sid in load_links():
         render(sid, tpath, pending)
+        # The transcript can lag the screen when a quiz is asked or answered, so the text
+        # just before it may be missing from this render. Rebuild again a few seconds later,
+        # in a detached process so the hook (and the quiz popup) isn't held up.
+        if event in ("PreToolUse", "PostToolUse") and tpath:
+            import subprocess
+            flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--project", str(PROJECT),
+                              "rerender", sid, str(tpath), "4"],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             creationflags=flags, close_fds=True)
 
 
 def cmd_link(session_id: str, path_arg: str) -> None:
@@ -481,6 +575,9 @@ def main() -> None:
         cmd_status(args[1])
     elif cmd == "render":
         print(f"{render(args[1], None)} blocks")
+    elif cmd == "rerender":  # rerender <session_id> <transcript> <delay_s>: the delayed catch-up
+        time.sleep(float(args[3]) if len(args) > 3 else 4)
+        render(args[1], Path(args[2]) if len(args) > 2 else None)
     else:
         sys.exit(__doc__)
 

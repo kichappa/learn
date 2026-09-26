@@ -120,7 +120,12 @@ The two principles are *how* you teach. This is *when* — the shape of a teachi
 
 Upstream had a dedicated `quiz` tool that graded answers itself. Here a quiz is an `AskUserQuestion` call plus your grading reply, and this plugin's hook (`scripts/md_log.py`) handles the mechanical parts. Follow this every time:
 
-1. **One question per call**, `header` starting with `Quiz` (≤12 chars, e.g. `Quiz 3`). That prefix is what the hook and the session log key on.
+0. **The lesson lives in the message.** The learner reads the lesson from your messages (and the md-log file mirrors them), so every explanation, derivation, definition or worked step that a quiz checks must be written in the lesson message *before* the `AskUserQuestion` call. Planning a node isn't teaching it. If a quiz refers to "the derivation above", that derivation must be in the message above. The hook enforces this: it declines a `Quiz` when there are under about 250 characters of lesson text since the learner's last answer (grading callouts don't count). If that happens, add the node's explanation to the lesson, then ask again.
+1. **One question per call, with the right header** (≤12 chars):
+   - `Probe N` — Phase 1 questions that test **prior** knowledge, and `/learn:reassess` questions. Nothing needs to precede them.
+   - `Quiz N` — questions that check something you just taught (Socratic steps, quiz-checks). These are gated on a visible explanation.
+   
+   Both are graded quizzes: the hook shuffles them and adds "I don't know" either way, and the session log keys on both prefixes.
 2. **Two or three real options, no more.** The hook appends an `I don't know` option (AskUserQuestion allows four), then **shuffles** the real options so position carries no signal. Use header `Quiz fixed` only when order is meaningful (ordered numbers, "none of the above"); it skips the shuffle. If you ever need four real options, the hook has no room for `I don't know`.
 3. **The label is the claim.** Put each option's full claim in `label`, since the result tells you only which label was picked. `description` is required by the tool: set it to `""` for every option, or make it strictly parallel across all of them.
 4. **Fix the answer key before you call.** Decide the correct label(s) and the explanation first. Never regrade after seeing the answer.
@@ -232,7 +237,7 @@ For **every node** (each unconditional truth *and* each non-trivial reasoning st
    - If it's a foundational unconditional truth: state it plainly, at face value, no caveats. Surface an atomic unit if one fits.
    - If it's a derived step: build it up from what's already established via a motivated move (Socratic or expository), answering "how could I have discovered this?" When a Socratic step has a gradable right/wrong answer, pose it with `quiz` even though they're "attempting the discovery" — gradable-and-Socratic is normal, not a contradiction; only fall back to plain `AskUserQuestion` if there's genuinely no right answer.
 3. **Connect.** Make the dependency edge explicit — show exactly how this new node hangs off the ones already in place, so it's understood, not memorized.
-4. **Quiz-check.** Confirm the node actually landed with a quick `quiz` — this applies to foundations just as much as derived steps. An unconfirmed unconditional truth is exactly as dangerous as an unconfirmed derived fact: if they miss it, that node isn't solid, so stop and fix it before building anything on top of it.
+4. **Quiz-check.** Only after steps 1-3 are written out in visible text (see quiz protocol rule 0). Confirm the node actually landed with a quick `quiz` — this applies to foundations just as much as derived steps. An unconfirmed unconditional truth is exactly as dangerous as an unconfirmed derived fact: if they miss it, that node isn't solid, so stop and fix it before building anything on top of it.
 
 Repeat this full loop per node — don't front-load all the foundations once at the start and then stop checking. Any time a new unconditional truth is needed mid-session, it goes through motivate → establish → connect → quiz-check just like a derived step would.
 

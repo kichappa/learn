@@ -1,6 +1,6 @@
 {
   "name": "learn",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A teaching system for Claude Code: probe where your understanding ends, plan from first principles, teach node by node with graded quizzes, verified diagrams, and a topic-agnostic learner profile that adapts the pace across sessions. Ported from amosblomqvist/learn (pi).",
   "author": {
     "name": "kichappa"
