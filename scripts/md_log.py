@@ -77,6 +77,14 @@ NOISE_TAGS = re.compile(
     r"local-command-caveat|command-message|command-name|command-args|user-memory-input)\b[^>]*>.*?</\1>",
     re.S,
 )
+SKIP_COMMANDS = {
+    "md-log", "clear", "compact", "resume", "rewind", "model", "config", "cost", "context", "effort",
+    "fast", "status", "help", "login", "logout", "plugin", "plugins", "permissions", "hooks", "agents",
+    "memory", "init", "doctor", "usage", "exit", "mcp", "theme", "vim", "add-dir", "export", "ide",
+    "statusline", "terminal-setup", "upgrade", "bug", "feedback", "release-notes", "output-style",
+    "privacy-settings", "reload-plugins", "rename", "sandbox", "todos", "copy", "keybindings",
+}
+PASTED = re.compile(r"<pasted_content\b[^>]*>(.*?)</pasted_content[^>]*>", re.S)
 SKIP_PREFIXES = ("<task-notification", "<local-command", "[Request interrupted", "Caveat:")
 WIKI_EMBED = re.compile(r"!\[\[([^\]|]+?\.(?:png|jpe?g|gif|svg|webp))(?:\|(\d+))?\]\]", re.I)
 
@@ -212,7 +220,7 @@ def clean_user_text(text: str) -> str | None:
     name = re.search(r"<command-name>\s*/?([^<\s]+)\s*</command-name>", text)
     if name:
         cmd = name.group(1)
-        if cmd.split(":")[-1] in ("md-log", "clear", "compact", "resume", "rewind", "model", "config", "cost", "context"):
+        if cmd.split(":")[-1] in SKIP_COMMANDS:
             return None
         args = re.search(r"<command-args>(.*?)</command-args>", text, re.S)
         rest = NOISE_TAGS.sub("", text).strip()
@@ -240,16 +248,55 @@ def user_prompt(e: dict) -> str | None:
     return text
 
 
-def callout(kind: str, title: str, body: list[str]) -> str:
-    return "\n".join([f"> [!{kind}] {title}"] + [f"> {ln}" if ln else ">" for ln in body])
+def callout(kind: str, title: str, body: list[str], fold: str = "") -> str:
+    """An Obsidian callout (a plain blockquote elsewhere). fold="-" starts it collapsed."""
+    return "\n".join([f"> [!{kind}]{fold} {title}"] + [f"> {ln}" if ln else ">" for ln in body])
 
 
 def user_block(text: str) -> str:
-    return f"> [!quote] YOU\n\n{text}"
+    """The learner's message in a box, with each pasted chunk folded away inside it."""
+    body: list[str] = []
+    pos = 0
+    for m in PASTED.finditer(text):
+        own = text[pos:m.start()].strip()
+        if own:
+            body += own.split("\n") + [""]
+        pasted = m.group(1).strip("\n").split("\n")
+        n = len(pasted)
+        body += callout("note", f"📋 Pasted · {n} line{'s' if n != 1 else ''}", pasted, fold="-").split("\n") + [""]
+        pos = m.end()
+    own = text[pos:].strip()
+    if own:
+        body += own.split("\n")
+    while body and not body[-1]:
+        body.pop()
+    return callout("quote", "🧑 You", body)
+
+
+def demote_headings(text: str) -> str:
+    """Push Claude's own headings one level down (## -> ###), outside code fences, so the
+    log's outline stays title > session > lesson section."""
+    out, fenced = [], False
+    for line in text.split("\n"):
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+        elif not fenced and re.match(r"#{1,5} ", line):
+            line = "#" + line
+        out.append(line)
+    return "\n".join(out)
 
 
 def assistant_block(text: str) -> str:
-    return f"> [!abstract] CLAUDE\n\n{text}"
+    # Plain prose, not boxed, so math, tables and diagrams get the full width
+    return f"**🎓 Claude**\n\n{demote_headings(text)}"
+
+
+def question_title(q: dict) -> str:
+    header = str(q.get("header", "")).strip()
+    if not is_quiz(q):
+        return f"💬 {header or 'Question'}"
+    icon = "🔍" if header.lower().startswith("probe") else "📝"
+    return f"{icon} {header.replace('fixed', '').replace('Fixed', '').strip() or 'Quiz'}"
 
 
 def question_block(q: dict) -> str:
@@ -262,36 +309,35 @@ def question_block(q: dict) -> str:
             label, desc = str(o.get("label", "")), str(o.get("description", "") or "").strip()
             # Quiz descriptions of the IDK option are boilerplate; real descriptions stay
             show_desc = desc and not (quiz and DONT_KNOW_RE.match(label))
-            body.append(f"{i}. {label}" + (f": {desc}" if show_desc else ""))
+            body.append(f"{i}. {label}" + (f" — {desc}" if show_desc else ""))
     if q.get("multiSelect"):
         body.append("")
-        body.append("*(select all that apply)*")
-    return callout("question", "Quiz" if quiz else "Question", body)
+        body.append("*Select all that apply.*")
+    return callout("question", question_title(q), body)
 
 
 def answer_block(q: dict, answer: str | None, note: str | None) -> str:
     quiz = is_quiz(q)
     labels = [str(o.get("label", "")) for o in q.get("options") or []]
     if answer is None:
-        return callout("warning", "Skipped", ["(no answer)"])
+        return callout("warning", "⏭️ Skipped", [])
     picked: list[str]
     if answer in labels:
         picked = [answer]
     else:
         parts = [p.strip() for p in answer.split(",")]
         picked = parts if parts and all(p in labels for p in parts) else []
-    if picked:
-        lines = [f"{labels.index(p) + 1}. {p}" for p in picked]
-    else:
-        lines = [f"Other: {answer}"]
     if quiz and picked and all(DONT_KNOW_RE.match(p) for p in picked):
-        title, kind = "Your answer: I don't know", "question"
-        lines = []
+        title, kind, lines = "🤷 I don't know", "question", []
+    elif picked:
+        title, kind = "✍️ Your answer", "example"
+        lines = [f"**{labels.index(p) + 1}.** {p}" for p in picked]
     else:
-        title, kind = ("Your answer" if quiz else "Answer"), "example"
+        title, kind = "✍️ Your answer, in your words", "example"
+        lines = answer.split("\n")
     if note:
-        lines += ([""] if lines else []) + [f"Note: {note}"]
-    return callout(kind, title, lines or ["—"])
+        lines += ([""] if lines else []) + [f"🗒️ *{note}*"]
+    return callout(kind, title, lines)
 
 
 def qa_blocks(questions: list[dict], result) -> list[str]:
@@ -304,7 +350,7 @@ def qa_blocks(questions: list[dict], result) -> list[str]:
         if result is None:
             continue
         if not isinstance(result, dict):
-            out.append(callout("warning", "Cancelled", ["(question dismissed)"]))
+            out.append(callout("warning", "⏭️ Dismissed", []))
             continue
         qtext = q.get("question", "")
         note = (notes.get(qtext) or {}).get("notes") if isinstance(notes.get(qtext), dict) else None
@@ -349,7 +395,7 @@ def build_blocks(chain: list[dict], log_dir: Path, pending: dict) -> list[str]:
                     qa_calls[b.get("id")] = (b.get("input") or {}).get("questions") or []
                 elif b.get("type") == "tool_use" and b.get("name") == "Skill":
                     flush()
-                    blocks.append(callout("note", f"SKILL loaded: {(b.get('input') or {}).get('skill', '?')}", []))
+                    blocks.append(callout("note", f"🧩 Skill: {(b.get('input') or {}).get('skill', '?')}", []))
             continue
         if e.get("type") != "user":
             continue
@@ -409,7 +455,9 @@ def write_log(log: Path, blocks: list[str]) -> None:
         current = log.read_text(encoding="utf-8", errors="replace")
         i = current.find(MARKER)
         head = current[:i] if i >= 0 else (current.rstrip() + "\n\n" if current.strip() else "")
-    body = head + MARKER + "\n\n" + "\n\n".join(blocks) + "\n"
+    title = log.stem.replace("_", " ").replace("-", " ").strip().capitalize()
+    body = head + MARKER + f"\n\n# 📘 {title}\n\n" + "\n\n".join(blocks) + "\n"
+    body = re.sub(r"\n{3,}", "\n\n", body)
     tmp = log.with_name(log.name + ".tmp")
     tmp.write_text(body, encoding="utf-8")
     try:
@@ -417,6 +465,15 @@ def write_log(log: Path, blocks: list[str]) -> None:
     except OSError:  # Windows: the viewer or Dropbox holds the file; write in place instead
         log.write_text(body, encoding="utf-8")
         tmp.unlink(missing_ok=True)
+
+
+def started_label(iso: str) -> str:
+    import datetime as dt
+    try:
+        when = dt.datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone()
+    except ValueError:
+        return iso[:16]
+    return when.strftime("%a %d %b %Y, %H:%M")
 
 
 def render(session_id: str, transcript: Path | None, pending: dict | None = None) -> int:
@@ -437,7 +494,7 @@ def render(session_id: str, transcript: Path | None, pending: dict | None = None
     blocks: list[str] = []
     for i, (start, sid, chain) in enumerate(parts):
         if len(parts) > 1:
-            blocks.append(f"---\n\n> [!info] Session {i + 1} · started {start[:16].replace('T', ' ')} UTC")
+            blocks.append(f"## 📅 Session {i + 1} · {started_label(start)}")
         blocks += build_blocks(chain, log.parent, (pending or empty) if sid == session_id else empty)
     write_log(log, blocks)
     return len(blocks)
