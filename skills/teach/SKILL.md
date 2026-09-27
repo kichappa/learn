@@ -120,7 +120,7 @@ The two principles are *how* you teach. This is *when* — the shape of a teachi
 
 Upstream had a dedicated `quiz` tool that graded answers itself. Here a quiz is an `AskUserQuestion` call plus your grading reply, and this plugin's hook (`scripts/md_log.py`) handles the mechanical parts. Follow this every time:
 
-0. **The lesson lives in the message.** The learner reads the lesson from your messages (and the md-log file mirrors them), so every explanation, derivation, definition or worked step that a quiz checks must be written in the lesson message *before* the `AskUserQuestion` call. Planning a node isn't teaching it. If a quiz refers to "the derivation above", that derivation must be in the message above. The hook enforces this: it declines a `Quiz` when there are under about 250 characters of lesson text since the learner's last answer (grading callouts don't count). If that happens, add the node's explanation to the lesson, then ask again.
+0. **The lesson lives in the message.** The learner reads the lesson from your messages (and the md-log file mirrors them), so every explanation, derivation, definition or worked step that a quiz checks must be written in the lesson message *before* the `AskUserQuestion` call. Planning a node isn't teaching it. The quiz then restates what it needs (rule 4), but the full explanation still comes first. The hook enforces this: it declines a `Quiz` when there are under about 250 characters of lesson text since the learner's last answer (grading callouts don't count). If that happens, add the node's explanation to the lesson, then ask again.
 1. **One question per call, with the right header** (≤12 chars):
    - `Probe N` — Phase 1 questions that test **prior** knowledge, and `/learn:reassess` questions. Nothing needs to precede them.
    - `Quiz N` — questions that check something you just taught (Socratic steps, quiz-checks). These are gated on a visible explanation.
@@ -128,10 +128,16 @@ Upstream had a dedicated `quiz` tool that graded answers itself. Here a quiz is 
    Both are graded quizzes: the hook shuffles them and adds "I don't know" either way, and the session log keys on both prefixes.
 2. **Two or three real options, no more.** The hook appends an `I don't know` option (AskUserQuestion allows four), then **shuffles** the real options so position carries no signal. Use header `Quiz fixed` only when order is meaningful (ordered numbers, "none of the above"); it skips the shuffle. If you ever need four real options, the hook has no room for `I don't know`.
 3. **The label is the claim.** Put each option's full claim in `label`, since the result tells you only which label was picked. `description` is required by the tool: set it to `""` for every option, or make it strictly parallel across all of them.
-4. **Fix the answer key before you call.** Decide the correct label(s) and the explanation first. Never regrade after seeing the answer.
-5. **Refer to options by label, never by number.** The learner saw a shuffled order you don't know.
-6. **Multiple correct answers:** `multiSelect: true`. It counts as correct only if the selected set matches exactly.
-7. **Grade immediately**, as the first thing in your next reply, in this shape (it renders as a coloured callout in the log):
+4. **The question stands alone.** The popup covers the lesson, so a learner who has to scroll back to decode a question is answering from memory of the wording, not of the idea. Write it in full sentences and make it self-contained:
+   - **Restate** the equation, model or numbers it relies on inside the question itself. Never write "the model above", "the derivation above" or "as shown earlier": paste the formula in.
+   - **Define every symbol** in the question, with its units where it has them.
+   - **Give the setup concretely:** a specific example, or a two-or-three-line ASCII sketch for anything spatial.
+   - **Keep the math readable raw.** The popup doesn't render LaTeX, so write it with Unicode (σ_d, s², √k, ≈) rather than `$\sigma_d$`.
+   - **Put the context in the question, never in the options.** The options stay bare, parallel claims (see the construction procedure below).
+5. **Fix the answer key before you call.** Decide the correct label(s) and the explanation first. Never regrade after seeing the answer.
+6. **Refer to options by label, never by number.** The learner saw a shuffled order you don't know.
+7. **Multiple correct answers:** `multiSelect: true`. It counts as correct only if the selected set matches exactly.
+8. **Grade immediately**, as the first thing in your next reply, in this shape (it renders as a coloured callout in the log):
 
    ```
    > [!success] Quiz — correct ✓
