@@ -586,16 +586,30 @@ def hook() -> None:
         # After-the-fact lesson check. Before a quiz, the transcript usually doesn't hold the
         # current message yet, so the gate above can't see it; after the answer, it does.
         qs = (payload.get("tool_input") or {}).get("questions") or []
+        notes = []
         if any(needs_explanation(q) for q in qs):
             seen = lesson_since_learner(tpath, tid)
             n, stop = seen if seen is not None else (None, None)
             floor = MIN_FOLLOWUP_CHARS if open_question(stop, qs) is not None else MIN_EXPLANATION_CHARS
             if n is not None and n < floor:
-                out = {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": (
+                notes.append(
                     "Lesson check: the message that asked this quiz had almost no lesson text "
                     f"(about {n} characters), so the learner answered without the node's explanation "
                     "in front of them, and the lesson log is missing it too. Start your next message by "
-                    "writing that node's explanation in the lesson, then grade the answer.")}}
+                    "writing that node's explanation in the lesson, then grade the answer.")
+        if any(is_quiz(q) for q in qs):
+            # The answer arrives mid-turn, right after a tool call, which is exactly when the
+            # next step tends to go straight to another tool call with no lesson text. Say what
+            # the next message must contain, every time, not only after a miss.
+            notes.append(
+                "Next step: the learner has answered. Write the grading callout, then the next "
+                "node's lesson, as lesson text in your reply before any other tool call. Those "
+                "are what the learner reads (and what the lesson log records). If a lesson check "
+                "declines the next quiz, the lesson text is missing from the message: write it, "
+                "rather than assuming it is already above.")
+        if notes:
+            out = {"hookSpecificOutput": {"hookEventName": "PostToolUse",
+                                          "additionalContext": "\n\n".join(notes)}}
     elif event == "UserPromptSubmit":
         pending["prompt"] = payload.get("prompt") or payload.get("user_prompt")
     elif event == "Stop":
