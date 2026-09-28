@@ -146,6 +146,11 @@ def lesson_since_learner(transcript: Path | None, tool_use_id: str) -> tuple[int
 
 MIN_FOLLOWUP_CHARS = 80
 MIN_GRADING_CHARS = 40
+NOT_TIMING = (
+    " This is not a timing issue: the check waits until this question is in the session file, "
+    "and a reply's text is always written there before the question that follows it, so any "
+    "reply you wrote would already be counted. Don't investigate the hook; write the missing "
+    "text in your reply, then ask again.")
 
 
 def graded_answer(stop: dict | None) -> tuple[str, str, bool] | None:
@@ -578,7 +583,8 @@ def hook() -> None:
                     f"Grading check: the learner answered {header}, and that answer hasn't been graded "
                     f"in the lesson yet.{said} That answer is the learner's work, not yours. Grade it in "
                     "your reply first (the callout: correct, incorrect or I don't know; the correct answer; "
-                    "and why, including anything in their reasoning that was off), then ask the next question.")}}))
+                    "and why, including anything in their reasoning that was off), then ask the next question."
+                    + NOT_TIMING)}}))
             return
         if any(needs_explanation(q) for q in qs):
             if seen is not None:
@@ -589,14 +595,14 @@ def hook() -> None:
                         "Lesson check: the learner's last reply to this quiz was typed text, not a choice, "
                         f"and it hasn't been responded to yet (about {n} characters since). They wrote: "
                         f'"{reply[:500]}". Respond to that in the lesson first (answer their question, or '
-                        "grade their worded attempt), then re-ask the quiz if it's still needed.")
+                        "grade their worded attempt), then re-ask the quiz if it's still needed." + NOT_TIMING)
                 elif reply is None and n < MIN_EXPLANATION_CHARS:
                     reason = (
                         "Lesson check: this quiz checks material that isn't in the lesson yet "
                         f"(about {n} characters of lesson text since the learner's last reply). "
                         "Add the explanation or worked step for this node to the lesson message, "
                         "then ask the quiz. For a question on prior knowledge, use the header "
-                        "'Probe N' instead.")
+                        "'Probe N' instead." + NOT_TIMING)
                 else:
                     reason = None
                 if reason:
