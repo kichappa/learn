@@ -30,7 +30,8 @@ A plugin can't ship environment variables or permission rules, so add these to `
 ```json
 {
   "env": {
-    "LEARN_PROFILES_DIR": "C:/Users/you/Dropbox/learner-profiles"
+    "LEARN_PROFILES_DIR": "C:/Users/you/Dropbox/learner-profiles",
+    "LEARN_PREVIEW_TAIL": "on"
   },
   "permissions": {
     "allow": [
@@ -45,7 +46,18 @@ A plugin can't ship environment variables or permission rules, so add these to `
 ```
 
 - **`LEARN_PROFILES_DIR`:** where learner profiles live. The default is `~/.claude/learner-profiles`. Point it at a synced folder to share profiles between computers.
+- **`LEARN_PREVIEW_TAIL`:** `on` by default. Set it to `off` to keep the plugin from installing its VS Code preview extension, and to remove it if it's already installed (see below).
 - **The allow rules:** let the diagram makers, the session logger and the profile script run, and let Claude read and edit your profiles, all without prompting. Match the `Read`/`Edit` paths to your `LEARN_PROFILES_DIR`.
+
+## Reading the log in VS Code
+
+When the log is rewritten, VS Code's Markdown preview can jump to the top. The plugin therefore bundles a tiny VS Code extension, **Markdown Preview Tail** (`vscode/md-preview-tail/`, one preview script, no settings):
+- **Following:** while you're near the end, it stays pinned to the end as the lesson grows.
+- **Paused:** when you scroll up to reread, it holds your place.
+
+A corner badge shows `⤓ following` or `⏸ paused`.
+
+At each session start, the plugin installs or updates it through VS Code's `code` command. This is quick: it reads VS Code's extension registry and calls `code` only when something needs doing. Set `LEARN_PREVIEW_TAIL` to `off` to opt out; the next session start removes it. To manage it by hand, use `python "<plugin dir>/scripts/preview_tail.py" status | install | uninstall`. After a change, run **Developer: Reload Window** in VS Code.
 
 ## Use
 

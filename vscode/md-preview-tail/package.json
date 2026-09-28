@@ -1,0 +1,13 @@
+{
+  "name": "md-preview-tail",
+  "displayName": "Markdown Preview Tail",
+  "description": "Keeps VS Code's built-in Markdown preview where you are reading when the file is rewritten, and follows the end of a growing file such as a learn md-log lesson.",
+  "publisher": "learn",
+  "version": "0.1.0",
+  "repository": { "type": "git", "url": "https://github.com/kichappa/learn" },
+  "engines": { "vscode": "^1.70.0" },
+  "categories": ["Other"],
+  "contributes": {
+    "markdown.previewScripts": ["./tail.js"]
+  }
+}

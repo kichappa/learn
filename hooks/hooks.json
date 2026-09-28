@@ -3,7 +3,11 @@
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/md_log.py\" hook", "timeout": 20 }
+          {
+            "type": "command",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/md_log.py\" hook",
+            "timeout": 20
+          }
         ]
       }
     ],
@@ -11,7 +15,11 @@
       {
         "matcher": "AskUserQuestion",
         "hooks": [
-          { "type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/md_log.py\" hook", "timeout": 20 }
+          {
+            "type": "command",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/md_log.py\" hook",
+            "timeout": 20
+          }
         ]
       }
     ],
@@ -19,14 +27,34 @@
       {
         "matcher": "AskUserQuestion",
         "hooks": [
-          { "type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/md_log.py\" hook", "timeout": 20 }
+          {
+            "type": "command",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/md_log.py\" hook",
+            "timeout": 20
+          }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/md_log.py\" hook", "timeout": 20 }
+          {
+            "type": "command",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/md_log.py\" hook",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/preview_tail.py\" auto",
+            "timeout": 120
+          }
         ]
       }
     ]
