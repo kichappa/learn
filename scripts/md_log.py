@@ -450,21 +450,28 @@ def build_blocks(chain: list[dict], log_dir: Path, pending: dict) -> list[str]:
 
 
 def write_log(log: Path, blocks: list[str]) -> None:
-    head = ""
+    """Update the log in place. Swapping in a new file (write a temp file, then rename)
+    makes editors such as VS Code's markdown preview reload from the top, so instead:
+    skip the write when nothing changed, append when only the end grew (the usual case),
+    and rewrite in place otherwise."""
+    current = ""
     if log.is_file():
-        current = log.read_text(encoding="utf-8", errors="replace")
-        i = current.find(MARKER)
-        head = current[:i] if i >= 0 else (current.rstrip() + "\n\n" if current.strip() else "")
+        with open(log, encoding="utf-8", errors="replace", newline="") as f:
+            current = f.read()
+    plain = current.replace("\r\n", "\n")
+    i = plain.find(MARKER)
+    head = plain[:i] if i >= 0 else (plain.rstrip() + "\n\n" if plain.strip() else "")
     title = log.stem.replace("_", " ").replace("-", " ").strip().capitalize()
     body = head + MARKER + f"\n\n# 📘 {title}\n\n" + "\n\n".join(blocks) + "\n"
     body = re.sub(r"\n{3,}", "\n\n", body)
-    tmp = log.with_name(log.name + ".tmp")
-    tmp.write_text(body, encoding="utf-8")
-    try:
-        os.replace(tmp, log)
-    except OSError:  # Windows: the viewer or Dropbox holds the file; write in place instead
-        log.write_text(body, encoding="utf-8")
-        tmp.unlink(missing_ok=True)
+    if current == body:
+        return
+    if current and body.startswith(current):
+        with open(log, "a", encoding="utf-8", newline="") as f:
+            f.write(body[len(current):])
+    else:
+        with open(log, "w", encoding="utf-8", newline="") as f:
+            f.write(body)
 
 
 def started_label(iso: str) -> str:
