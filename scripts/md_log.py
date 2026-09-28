@@ -103,9 +103,10 @@ def needs_explanation(q: dict) -> bool:
 MIN_EXPLANATION_CHARS = 250
 
 
-def lesson_since_learner(transcript: Path | None, tool_use_id: str) -> tuple[int, dict | None] | None:
+def lesson_since_learner(transcript: Path | None, tool_use_id: str) -> tuple[int, dict | None, int] | None:
     """(characters of lesson prose since the learner last spoke, the answer entry they last
-    spoke in or None if it was a typed prompt). Blockquote lines (the grading callout) don't count: they grade the previous
+    spoke in or None if it was a typed prompt, characters of ALL reply text since then
+    including grading callouts). Blockquote lines (the grading callout) don't count: they grade the previous
     quiz, they don't teach the next node.
 
     The hook can fire before Claude Code has written the current message to the transcript,
@@ -119,7 +120,7 @@ def lesson_since_learner(transcript: Path | None, tool_use_id: str) -> tuple[int
         time.sleep(0.2)
     else:
         return None
-    chars, stop = 0, None
+    chars, stop, everything = 0, None, 0
     chain = active_chain(load_entries(transcript))
     # Count back from the message holding this quiz, not from the end of the session
     here = next((i for i in range(len(chain) - 1, -1, -1) if chain[i].get("type") == "assistant"
@@ -139,10 +140,26 @@ def lesson_since_learner(transcript: Path | None, tool_use_id: str) -> tuple[int
             for b in content:
                 if isinstance(b, dict) and b.get("type") == "text":
                     chars += sum(len(ln) for ln in b["text"].splitlines() if not ln.lstrip().startswith(">"))
-    return chars, stop
+                    everything += len(b["text"].strip())
+    return chars, stop, everything
 
 
 MIN_FOLLOWUP_CHARS = 80
+MIN_GRADING_CHARS = 40
+
+
+def graded_answer(stop: dict | None) -> tuple[str, str, bool] | None:
+    """(header, answer, typed) if the learner's last input answered a quiz or probe."""
+    tur = (stop or {}).get("toolUseResult")
+    if not isinstance(tur, dict):
+        return None
+    for q in tur.get("questions") or []:
+        if is_quiz(q):
+            reply = str((tur.get("answers") or {}).get(q.get("question", ""), ""))
+            labels = {str(o.get("label", "")) for o in q.get("options") or []}
+            typed = bool(reply) and reply not in labels and not all(p.strip() in labels for p in reply.split(","))
+            return str(q.get("header", "")).strip() or "the last quiz", reply, typed
+    return None
 
 
 def open_question(stop: dict | None, qs: list[dict]) -> str | None:
@@ -550,10 +567,22 @@ def hook() -> None:
         qs = tool_input.get("questions") or []
         # Gate: a check-quiz must come after the lesson text it checks, so the learner (and
         # the log) have the material. Worded around the lesson, not around how it was drafted.
+        seen = lesson_since_learner(tpath, payload.get("tool_use_id", "")) if any(is_quiz(q) for q in qs) else None
+        prev = graded_answer(seen[1]) if seen is not None else None
+        if prev is not None and seen[2] < MIN_GRADING_CHARS:
+            header, reply, typed = prev
+            said = f' Their answer, in their own words: "{reply[:400]}".' if typed else f' They chose: "{reply[:200]}".'
+            sys.stdout.write(json.dumps({"hookSpecificOutput": {
+                "hookEventName": "PreToolUse", "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    f"Grading check: the learner answered {header}, and that answer hasn't been graded "
+                    f"in the lesson yet.{said} That answer is the learner's work, not yours. Grade it in "
+                    "your reply first (the callout: correct, incorrect or I don't know; the correct answer; "
+                    "and why, including anything in their reasoning that was off), then ask the next question.")}}))
+            return
         if any(needs_explanation(q) for q in qs):
-            seen = lesson_since_learner(tpath, payload.get("tool_use_id", ""))
             if seen is not None:
-                n, stop = seen
+                n, stop, _ = seen
                 reply = open_question(stop, qs)
                 if reply is not None and n < MIN_FOLLOWUP_CHARS:
                     reason = (
@@ -589,7 +618,7 @@ def hook() -> None:
         notes = []
         if any(needs_explanation(q) for q in qs):
             seen = lesson_since_learner(tpath, tid)
-            n, stop = seen if seen is not None else (None, None)
+            n, stop, _ = seen if seen is not None else (None, None, 0)
             floor = MIN_FOLLOWUP_CHARS if open_question(stop, qs) is not None else MIN_EXPLANATION_CHARS
             if n is not None and n < floor:
                 notes.append(
@@ -601,6 +630,12 @@ def hook() -> None:
             # The answer arrives mid-turn, right after a tool call, which is exactly when the
             # next step tends to go straight to another tool call with no lesson text. Say what
             # the next message must contain, every time, not only after a miss.
+            mine = graded_answer({"toolUseResult": payload.get("tool_response")}) if isinstance(
+                payload.get("tool_response"), dict) else None
+            if mine is not None and mine[2]:
+                notes.append(
+                    f'The learner answered {mine[0]} in their own words: "{mine[1][:400]}". '
+                    "That is the learner's answer, not yours; grade it as theirs.")
             notes.append(
                 "Next step: the learner has answered. Write the grading callout, then the next "
                 "node's lesson, as lesson text in your reply before any other tool call. Those "
