@@ -473,9 +473,8 @@ def build_blocks(chain: list[dict], log_dir: Path, pending: dict) -> list[str]:
 
 def write_log(log: Path, blocks: list[str]) -> None:
     """Update the log in place. Swapping in a new file (write a temp file, then rename)
-    makes editors such as VS Code's markdown preview reload from the top, so instead:
-    skip the write when nothing changed, append when only the end grew (the usual case),
-    and rewrite in place otherwise."""
+    makes editors such as VS Code's markdown preview reload from the top, so instead skip
+    the write when nothing changed, and otherwise rewrite only the part that changed."""
     current = ""
     if log.is_file():
         with open(log, encoding="utf-8", errors="replace", newline="") as f:
@@ -488,12 +487,19 @@ def write_log(log: Path, blocks: list[str]) -> None:
     body = re.sub(r"\n{3,}", "\n\n", body)
     if current == body:
         return
-    if current and body.startswith(current):
-        with open(log, "a", encoding="utf-8", newline="") as f:
-            f.write(body[len(current):])
-    else:
+    if not log.is_file():
         with open(log, "w", encoding="utf-8", newline="") as f:
             f.write(body)
+        return
+    # Rewrite only from the first byte that changed, then trim. The file is never emptied
+    # (opening it for writing would truncate it to zero first, and a preview that catches
+    # the empty file resets to the top), and everything above the change is left alone.
+    old, new = current.encode("utf-8"), body.encode("utf-8")
+    same = next((i for i, (a, b) in enumerate(zip(old, new)) if a != b), min(len(old), len(new)))
+    with open(log, "r+b") as f:
+        f.seek(same)
+        f.write(new[same:])
+        f.truncate()
 
 
 def started_label(iso: str) -> str:
