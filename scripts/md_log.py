@@ -103,9 +103,9 @@ def needs_explanation(q: dict) -> bool:
 MIN_EXPLANATION_CHARS = 250
 
 
-def visible_text_this_turn(transcript: Path | None, tool_use_id: str) -> int | None:
-    """Characters of lesson prose since the learner last spoke (a prompt or a question
-    answer). Blockquote lines (the grading callout) don't count: they grade the previous
+def lesson_since_learner(transcript: Path | None, tool_use_id: str) -> tuple[int, dict | None] | None:
+    """(characters of lesson prose since the learner last spoke, the answer entry they last
+    spoke in or None if it was a typed prompt). Blockquote lines (the grading callout) don't count: they grade the previous
     quiz, they don't teach the next node.
 
     The hook can fire before Claude Code has written the current message to the transcript,
@@ -119,7 +119,7 @@ def visible_text_this_turn(transcript: Path | None, tool_use_id: str) -> int | N
         time.sleep(0.2)
     else:
         return None
-    chars = 0
+    chars, stop = 0, None
     chain = active_chain(load_entries(transcript))
     # Count back from the message holding this quiz, not from the end of the session
     here = next((i for i in range(len(chain) - 1, -1, -1) if chain[i].get("type") == "assistant"
@@ -132,13 +132,35 @@ def visible_text_this_turn(transcript: Path | None, tool_use_id: str) -> int | N
                 continue  # this quiz's own answer (present when checking after the fact)
             answered = isinstance(e.get("toolUseResult"), dict) and "answers" in e["toolUseResult"]
             if answered or user_prompt(e):
+                stop = e if answered else None
                 break
             continue
         if e.get("type") == "assistant" and isinstance(content, list):
             for b in content:
                 if isinstance(b, dict) and b.get("type") == "text":
                     chars += sum(len(ln) for ln in b["text"].splitlines() if not ln.lstrip().startswith(">"))
-    return chars
+    return chars, stop
+
+
+MIN_FOLLOWUP_CHARS = 80
+
+
+def open_question(stop: dict | None, qs: list[dict]) -> str | None:
+    """The learner's typed reply, if their last input was a free-text ("Other") reply to this
+    same quiz (same header). That is a clarifying question or a worded attempt: a re-ask must
+    respond to it first, but a two-sentence clarification is enough."""
+    tur = (stop or {}).get("toolUseResult")
+    if not isinstance(tur, dict):
+        return None
+    headers = {str(q.get("header", "")).strip().lower() for q in qs}
+    for q in tur.get("questions") or []:
+        if str(q.get("header", "")).strip().lower() not in headers:
+            continue
+        reply = str((tur.get("answers") or {}).get(q.get("question", ""), ""))
+        labels = {str(o.get("label", "")) for o in q.get("options") or []}
+        if reply and reply not in labels and not all(p.strip() in labels for p in reply.split(",")):
+            return reply
+    return None
 
 
 def prepare_quiz(q: dict) -> dict:
@@ -523,17 +545,30 @@ def hook() -> None:
         # Gate: a check-quiz must come after the lesson text it checks, so the learner (and
         # the log) have the material. Worded around the lesson, not around how it was drafted.
         if any(needs_explanation(q) for q in qs):
-            n = visible_text_this_turn(tpath, payload.get("tool_use_id", ""))
-            if n is not None and n < MIN_EXPLANATION_CHARS:
-                sys.stdout.write(json.dumps({"hookSpecificOutput": {
-                    "hookEventName": "PreToolUse", "permissionDecision": "deny",
-                    "permissionDecisionReason": (
+            seen = lesson_since_learner(tpath, payload.get("tool_use_id", ""))
+            if seen is not None:
+                n, stop = seen
+                reply = open_question(stop, qs)
+                if reply is not None and n < MIN_FOLLOWUP_CHARS:
+                    reason = (
+                        "Lesson check: the learner's last reply to this quiz was typed text, not a choice, "
+                        f"and it hasn't been responded to yet (about {n} characters since). They wrote: "
+                        f'"{reply[:500]}". Respond to that in the lesson first (answer their question, or '
+                        "grade their worded attempt), then re-ask the quiz if it's still needed.")
+                elif reply is None and n < MIN_EXPLANATION_CHARS:
+                    reason = (
                         "Lesson check: this quiz checks material that isn't in the lesson yet "
-                        f"(about {n} characters of lesson text since the learner's last answer). "
+                        f"(about {n} characters of lesson text since the learner's last reply). "
                         "Add the explanation or worked step for this node to the lesson message, "
                         "then ask the quiz. For a question on prior knowledge, use the header "
-                        "'Probe N' instead.")}}))
-                return
+                        "'Probe N' instead.")
+                else:
+                    reason = None
+                if reason:
+                    sys.stdout.write(json.dumps({"hookSpecificOutput": {
+                        "hookEventName": "PreToolUse", "permissionDecision": "deny",
+                        "permissionDecisionReason": reason}}))
+                    return
         if any(is_quiz(q) for q in qs):
             qs = [prepare_quiz(q) if is_quiz(q) else q for q in qs]
             out = {"hookSpecificOutput": {"hookEventName": "PreToolUse",
@@ -546,8 +581,10 @@ def hook() -> None:
         # current message yet, so the gate above can't see it; after the answer, it does.
         qs = (payload.get("tool_input") or {}).get("questions") or []
         if any(needs_explanation(q) for q in qs):
-            n = visible_text_this_turn(tpath, tid)
-            if n is not None and n < MIN_EXPLANATION_CHARS:
+            seen = lesson_since_learner(tpath, tid)
+            n, stop = seen if seen is not None else (None, None)
+            floor = MIN_FOLLOWUP_CHARS if open_question(stop, qs) is not None else MIN_EXPLANATION_CHARS
+            if n is not None and n < floor:
                 out = {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": (
                     "Lesson check: the message that asked this quiz had almost no lesson text "
                     f"(about {n} characters), so the learner answered without the node's explanation "
