@@ -120,13 +120,13 @@ The two principles are *how* you teach. This is *when* — the shape of a teachi
 
 Upstream had a dedicated `quiz` tool that graded answers itself. Here a quiz is an `AskUserQuestion` call plus your grading reply, and this plugin's hook (`scripts/md_log.py`) handles the mechanical parts. Follow this every time:
 
-0. **Grade in the reply, then ask the next popup.** The learner reads the lesson in your replies (the md-log file mirrors them), so everything they need is written as reply text, in this order, in one turn:
-   - **When an answer comes back,** first write the grading in your reply (rule 8): correct, incorrect or I don't know; the correct answer; why; and anything in their reasoning that was off.
-   - **Then** write the next node's explanation, if the lesson moves on.
-   - **Then** open the next popup, in the same turn. Don't wait for the learner's go-ahead.
-   - **During an active discussion,** when the learner asked a question or requested a rewrite, answer it and end the turn. Ask the next popup after they reply.
+0. **Grade, end the turn, then the popup.** The learner reads the lesson in your replies (the md-log file mirrors them). When an answer comes back:
+   - **Write the grading as your reply** (rule 8): correct, incorrect or I don't know; the correct answer; why; and anything in their reasoning that was off. Then add the next node's explanation, if the lesson moves on.
+   - **End your turn there.** Don't open the next popup in the same turn.
+   - **A hook then sends you back** with a note to ask the next quiz. Open the popup straight away; the learner doesn't have to reply in between.
+   - **During an active discussion,** when the learner asked a question or requested a rewrite, answer it and end the turn. The hook stays quiet, and the next popup waits for their reply.
 
-   **A hook enforces the grading step.** It declines a popup that comes straight after a quiz answer when no grading has been written since. **The check is always right.** If it declines, assume you made a mistake: don't argue with it, don't investigate or debug the hook, and don't conclude that it read the session too early. Write the grading again in your reply, more fully and more verbosely than you think is needed. Only text in your reply to the learner counts. Then ask the popup again **in the same turn**: once the grading is written it goes through, so don't fall back to ending the turn. Repeat until it goes through.
+   If a popup is ever declined because no grading has been written, **the check is always right.** Don't argue with it or investigate the hook. Write the grading as your reply, more fully than you think is needed, and end your turn.
 1. **One question per call, with the right header** (≤12 chars):
    - `Probe N` — Phase 1 questions that test **prior** knowledge, and `/learn:reassess` questions.
    - `Quiz N` — questions that check something you just taught (Socratic steps, quiz-checks).

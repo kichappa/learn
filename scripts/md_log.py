@@ -143,6 +143,41 @@ def ungraded_answer(transcript: Path | None, tool_use_id: str) -> tuple[str, str
     return None
 
 
+def graded_turn_ended(transcript: Path | None, last_text: str) -> str | None:
+    """The uuid of the learner's last quiz answer, if the turn now ending has written a grading
+    for it (reply text since the answer) and asked no question since. None during discussion:
+    when the learner's last input was a typed message, the next question waits for them."""
+    if not transcript or not transcript.is_file():
+        return None
+    written, declined = 0, set()
+    for e in reversed(active_chain(load_entries(transcript))):
+        content = e.get("message", {}).get("content")
+        if e.get("type") == "assistant" and isinstance(content, list):
+            for b in content:
+                if not isinstance(b, dict):
+                    continue
+                if b.get("type") == "tool_use" and b.get("name") == QA_TOOL and b.get("id") not in declined:
+                    return None  # a question is already out (declined ones never reached the learner)
+                if b.get("type") == "text":
+                    written += len(b.get("text", "").strip())
+            continue
+        if e.get("type") != "user":
+            continue
+        if isinstance(content, list):
+            declined |= {b.get("tool_use_id") for b in content
+                         if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("is_error")}
+        tur = e.get("toolUseResult")
+        if isinstance(tur, dict) and "answers" in tur:
+            if not any(is_quiz(q) for q in tur.get("questions") or []):
+                return None
+            # The transcript can lag the final message slightly; the Stop payload carries it
+            written = max(written, len(last_text.strip()))
+            return e.get("uuid") if written >= MIN_GRADING_CHARS else None
+        if user_prompt(e):
+            return None
+    return None
+
+
 def prepare_quiz(q: dict) -> dict:
     """Add "I don't know" if there's room, then shuffle the real options (IDK stays last)."""
     q = dict(q)
@@ -542,9 +577,9 @@ def hook() -> None:
                     f"the lesson since.{said} This check is always right: assume the grading is missing, "
                     "don't argue with the check and don't investigate the hook. Write the grading in your "
                     "reply now, more fully than you think is needed (correct, incorrect or I don't know; "
-                    "the correct answer; why; and anything in their reasoning that was off). Only text in "
-                    "your reply to the learner counts. Then ask this same question again, in this same "
-                    "turn: once the grading is written it goes through, so don't end the turn instead.")}}))
+                    "the correct answer; why; and anything in their reasoning that was off) as your reply "
+                    "to the learner, and end your turn there. You'll then be prompted to ask this question, "
+                    "and it will go through.")}}))
             return
         if any(is_quiz(q) for q in qs):
             qs = [prepare_quiz(q) if is_quiz(q) else q for q in qs]
@@ -558,6 +593,22 @@ def hook() -> None:
         pending["prompt"] = payload.get("prompt") or payload.get("user_prompt")
     elif event == "Stop":
         pending["last_assistant"] = payload.get("last_assistant_message")
+        answer = None if payload.get("stop_hook_active") else graded_turn_ended(
+            tpath, payload.get("last_assistant_message") or "")
+        nudges_file = LINKS_FILE.parent / "nudges.json"
+        try:
+            nudged = json.loads(nudges_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            nudged = {}
+        if answer and nudged.get(sid) != answer:
+            nudged[sid] = answer
+            nudges_file.parent.mkdir(parents=True, exist_ok=True)
+            nudges_file.write_text(json.dumps(nudged, indent=2) + "\n", encoding="utf-8")
+            out = {"decision": "block", "reason": (
+                "Lesson rhythm: your grading has reached the learner. If the lesson continues, ask "
+                "the next quiz now with the AskUserQuestion popup; nothing needs to come before it. "
+                "If the lesson is finished, or you asked the learner something and are waiting for "
+                "their reply, just end your turn again.")}
 
     # Print the quiz rewrite first, so a logging failure can't lose it
     if out is not None:
