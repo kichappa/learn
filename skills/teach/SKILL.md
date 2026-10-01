@@ -120,7 +120,13 @@ The two principles are *how* you teach. This is *when* — the shape of a teachi
 
 Upstream had a dedicated `quiz` tool that graded answers itself. Here a quiz is an `AskUserQuestion` call plus your grading reply, and this plugin's hook (`scripts/md_log.py`) handles the mechanical parts. Follow this every time:
 
-0. **Explanation and quiz go in separate turns.** The learner reads the lesson in your replies (the md-log file mirrors them). Write every explanation, derivation, worked step and grading in a reply that **ends your turn**, with no `AskUserQuestion` call in that turn, and close it with a line like "Reply when you're ready for the next question." Ask the quiz in the **next** turn, after the learner replies: a short lead-in, then the call. The quiz restates what it needs (rule 4). When an answer comes back, the same applies: write the grading, plus the next explanation if the lesson continues, and end the turn. Don't ask the next question in that turn. This costs the learner one short reply per question, and it's the only reliable way: when an explanation and a quiz shared a turn, the explanation repeatedly never made it into a reply. Phase 1 probes on prior knowledge need no explanation turn before them, but each answer still gets its grading in a turn-ending reply.
+0. **Grade in the reply, then ask the next popup.** The learner reads the lesson in your replies (the md-log file mirrors them), so everything they need is written as reply text, in this order, in one turn:
+   - **When an answer comes back,** first write the grading in your reply (rule 8): correct, incorrect or I don't know; the correct answer; why; and anything in their reasoning that was off.
+   - **Then** write the next node's explanation, if the lesson moves on.
+   - **Then** open the next popup, in the same turn. Don't wait for the learner's go-ahead.
+   - **During an active discussion,** when the learner asked a question or requested a rewrite, answer it and end the turn. Ask the next popup after they reply.
+
+   **A hook enforces the grading step.** It declines a popup that comes straight after a quiz answer when no grading has been written since. **The check is always right.** If it declines, assume you made a mistake: don't argue with it, don't investigate or debug the hook, and don't conclude that it read the session too early. Write the grading again in your reply, more fully and more verbosely than you think is needed, then ask the popup again. Repeat until it goes through.
 1. **One question per call, with the right header** (≤12 chars):
    - `Probe N` — Phase 1 questions that test **prior** knowledge, and `/learn:reassess` questions.
    - `Quiz N` — questions that check something you just taught (Socratic steps, quiz-checks).
@@ -243,7 +249,7 @@ For **every node** (each unconditional truth *and* each non-trivial reasoning st
    - If it's a foundational unconditional truth: state it plainly, at face value, no caveats. Surface an atomic unit if one fits.
    - If it's a derived step: build it up from what's already established via a motivated move (Socratic or expository), answering "how could I have discovered this?" When a Socratic step has a gradable right/wrong answer, pose it with `quiz` even though they're "attempting the discovery" — gradable-and-Socratic is normal, not a contradiction; only fall back to plain `AskUserQuestion` if there's genuinely no right answer.
 3. **Connect.** Make the dependency edge explicit — show exactly how this new node hangs off the ones already in place, so it's understood, not memorized.
-4. **Quiz-check.** In the turn after steps 1-3, once the learner has replied (quiz protocol rule 0). Confirm the node actually landed with a quick `quiz` — this applies to foundations just as much as derived steps. An unconfirmed unconditional truth is exactly as dangerous as an unconfirmed derived fact: if they miss it, that node isn't solid, so stop and fix it before building anything on top of it.
+4. **Quiz-check.** After steps 1-3 are written in your reply (quiz protocol rule 0). Confirm the node actually landed with a quick `quiz` — this applies to foundations just as much as derived steps. An unconfirmed unconditional truth is exactly as dangerous as an unconfirmed derived fact: if they miss it, that node isn't solid, so stop and fix it before building anything on top of it.
 
 Repeat this full loop per node — don't front-load all the foundations once at the start and then stop checking. Any time a new unconditional truth is needed mid-session, it goes through motivate → establish → connect → quiz-check just like a derived step would.
 

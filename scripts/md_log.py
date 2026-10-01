@@ -96,6 +96,53 @@ def is_quiz(q: dict) -> bool:
     return str(q.get("header", "")).strip().lower().startswith(("quiz", "probe"))
 
 
+MIN_GRADING_CHARS = 40
+
+
+def ungraded_answer(transcript: Path | None, tool_use_id: str) -> tuple[str, str, bool] | None:
+    """If this popup comes straight after the learner answered a quiz or probe and no reply
+    has been written since, return (header, their answer, typed in their own words).
+
+    Claude Code writes a reply's text to the session file before the tool call that follows
+    it, so once this popup is in the file, any grading written before it is too. If the popup
+    never shows up, return None and let it through rather than judge a stale file."""
+    if not transcript or not tool_use_id:
+        return None
+    for _ in range(20):  # up to ~4 s
+        if transcript.is_file() and tool_use_id in transcript.read_text(encoding="utf-8", errors="replace"):
+            break
+        time.sleep(0.2)
+    else:
+        return None
+    chain = active_chain(load_entries(transcript))
+    here = next((i for i in range(len(chain) - 1, -1, -1) if chain[i].get("type") == "assistant"
+                 and tool_use_id in json.dumps(chain[i].get("message", {}).get("content"))), None)
+    if here is None:
+        return None
+    written = 0
+    for e in reversed(chain[:here + 1]):
+        content = e.get("message", {}).get("content")
+        if e.get("type") == "assistant" and isinstance(content, list):
+            written += sum(len(b.get("text", "").strip()) for b in content if isinstance(b, dict) and b.get("type") == "text")
+            continue
+        if e.get("type") != "user":
+            continue
+        tur = e.get("toolUseResult")
+        if isinstance(tur, dict) and "answers" in tur:
+            if written >= MIN_GRADING_CHARS:
+                return None
+            for q in tur.get("questions") or []:
+                if is_quiz(q):
+                    reply = str((tur.get("answers") or {}).get(q.get("question", ""), ""))
+                    labels = {str(o.get("label", "")) for o in q.get("options") or []}
+                    typed = bool(reply) and reply not in labels and not all(p.strip() in labels for p in reply.split(","))
+                    return str(q.get("header", "")).strip() or "the last quiz", reply, typed
+            return None  # the last answer was to a plain question, nothing to grade
+        if user_prompt(e):
+            return None  # the learner typed a message: a new turn, not straight after an answer
+    return None
+
+
 def prepare_quiz(q: dict) -> dict:
     """Add "I don't know" if there's room, then shuffle the real options (IDK stays last)."""
     q = dict(q)
@@ -481,6 +528,23 @@ def hook() -> None:
     if event == "PreToolUse" and payload.get("tool_name") == QA_TOOL:
         tool_input = payload.get("tool_input") or {}
         qs = tool_input.get("questions") or []
+        # Grading check: a popup asked straight after the learner answered a quiz must come
+        # after the grading of that answer, written as a reply (teach skill, quiz rule 0).
+        miss = ungraded_answer(tpath, payload.get("tool_use_id", "")) if any(is_quiz(q) for q in qs) else None
+        if miss is not None:
+            header, reply, typed = miss
+            said = (f' Their answer, in their own words: "{reply[:400]}".' if typed
+                    else f' They chose: "{reply[:200]}".')
+            sys.stdout.write(json.dumps({"hookSpecificOutput": {
+                "hookEventName": "PreToolUse", "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    f"Grading check: the learner answered {header}, and no grading has been written in "
+                    f"the lesson since.{said} This check is always right: assume the grading is missing, "
+                    "don't argue with the check and don't investigate the hook. Write the grading in your "
+                    "reply now, more fully than you think is needed (correct, incorrect or I don't know; "
+                    "the correct answer; why; and anything in their reasoning that was off), then ask "
+                    "the next question again.")}}))
+            return
         if any(is_quiz(q) for q in qs):
             qs = [prepare_quiz(q) if is_quiz(q) else q for q in qs]
             out = {"hookSpecificOutput": {"hookEventName": "PreToolUse",
