@@ -126,7 +126,7 @@ Upstream had a dedicated `quiz` tool that graded answers itself. Here a quiz is 
    - **Then** open the next popup, in the same turn. Don't wait for the learner's go-ahead.
    - **During an active discussion,** when the learner asked a question or requested a rewrite, answer it and end the turn. Ask the next popup after they reply.
 
-   **A hook enforces the grading step.** It declines a popup that comes straight after a quiz answer when no grading has been written since. **The check is always right.** If it declines, assume you made a mistake: don't argue with it, don't investigate or debug the hook, and don't conclude that it read the session too early. Write the grading again in your reply, more fully and more verbosely than you think is needed, then ask the popup again. Repeat until it goes through.
+   **A hook enforces the grading step.** It declines a popup that comes straight after a quiz answer when no grading has been written since. **The check is always right.** If it declines, assume you made a mistake: don't argue with it, don't investigate or debug the hook, and don't conclude that it read the session too early. Write the grading again in your reply, more fully and more verbosely than you think is needed. Only text in your reply to the learner counts. Then ask the popup again **in the same turn**: once the grading is written it goes through, so don't fall back to ending the turn. Repeat until it goes through.
 1. **One question per call, with the right header** (≤12 chars):
    - `Probe N` — Phase 1 questions that test **prior** knowledge, and `/learn:reassess` questions.
    - `Quiz N` — questions that check something you just taught (Socratic steps, quiz-checks).

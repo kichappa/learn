@@ -542,8 +542,9 @@ def hook() -> None:
                     f"the lesson since.{said} This check is always right: assume the grading is missing, "
                     "don't argue with the check and don't investigate the hook. Write the grading in your "
                     "reply now, more fully than you think is needed (correct, incorrect or I don't know; "
-                    "the correct answer; why; and anything in their reasoning that was off), then ask "
-                    "the next question again.")}}))
+                    "the correct answer; why; and anything in their reasoning that was off). Only text in "
+                    "your reply to the learner counts. Then ask this same question again, in this same "
+                    "turn: once the grading is written it goes through, so don't end the turn instead.")}}))
             return
         if any(is_quiz(q) for q in qs):
             qs = [prepare_quiz(q) if is_quiz(q) else q for q in qs]
