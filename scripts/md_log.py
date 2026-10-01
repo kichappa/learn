@@ -96,95 +96,6 @@ def is_quiz(q: dict) -> bool:
     return str(q.get("header", "")).strip().lower().startswith(("quiz", "probe"))
 
 
-def needs_explanation(q: dict) -> bool:
-    return str(q.get("header", "")).strip().lower().startswith("quiz")
-
-
-MIN_EXPLANATION_CHARS = 250
-
-
-def lesson_since_learner(transcript: Path | None, tool_use_id: str) -> tuple[int, dict | None, int] | None:
-    """(characters of lesson prose since the learner last spoke, the answer entry they last
-    spoke in or None if it was a typed prompt, characters of ALL reply text since then
-    including grading callouts). Blockquote lines (the grading callout) don't count: they grade the previous
-    quiz, they don't teach the next node.
-
-    The hook can fire before Claude Code has written the current message to the transcript,
-    so wait until the entry holding this tool call appears. If it never does, return None:
-    the caller then lets the quiz through rather than block on a stale file."""
-    if not transcript or not tool_use_id:
-        return None
-    for _ in range(20):  # up to ~4 s
-        if transcript.is_file() and tool_use_id in transcript.read_text(encoding="utf-8", errors="replace"):
-            break
-        time.sleep(0.2)
-    else:
-        return None
-    chars, stop, everything = 0, None, 0
-    chain = active_chain(load_entries(transcript))
-    # Count back from the message holding this quiz, not from the end of the session
-    here = next((i for i in range(len(chain) - 1, -1, -1) if chain[i].get("type") == "assistant"
-                 and tool_use_id in json.dumps(chain[i].get("message", {}).get("content"))), len(chain) - 1)
-    for e in reversed(chain[:here + 1]):
-        content = e.get("message", {}).get("content")
-        if e.get("type") == "user":
-            if isinstance(content, list) and any(isinstance(b, dict) and b.get("tool_use_id") == tool_use_id
-                                                 for b in content):
-                continue  # this quiz's own answer (present when checking after the fact)
-            answered = isinstance(e.get("toolUseResult"), dict) and "answers" in e["toolUseResult"]
-            if answered or user_prompt(e):
-                stop = e if answered else None
-                break
-            continue
-        if e.get("type") == "assistant" and isinstance(content, list):
-            for b in content:
-                if isinstance(b, dict) and b.get("type") == "text":
-                    chars += sum(len(ln) for ln in b["text"].splitlines() if not ln.lstrip().startswith(">"))
-                    everything += len(b["text"].strip())
-    return chars, stop, everything
-
-
-MIN_FOLLOWUP_CHARS = 80
-MIN_GRADING_CHARS = 40
-NOT_TIMING = (
-    " This is not a timing issue: the check waits until this question is in the session file, "
-    "and a reply's text is always written there before the question that follows it, so any "
-    "reply you wrote would already be counted. Don't investigate the hook; write the missing "
-    "text in your reply, then ask again.")
-
-
-def graded_answer(stop: dict | None) -> tuple[str, str, bool] | None:
-    """(header, answer, typed) if the learner's last input answered a quiz or probe."""
-    tur = (stop or {}).get("toolUseResult")
-    if not isinstance(tur, dict):
-        return None
-    for q in tur.get("questions") or []:
-        if is_quiz(q):
-            reply = str((tur.get("answers") or {}).get(q.get("question", ""), ""))
-            labels = {str(o.get("label", "")) for o in q.get("options") or []}
-            typed = bool(reply) and reply not in labels and not all(p.strip() in labels for p in reply.split(","))
-            return str(q.get("header", "")).strip() or "the last quiz", reply, typed
-    return None
-
-
-def open_question(stop: dict | None, qs: list[dict]) -> str | None:
-    """The learner's typed reply, if their last input was a free-text ("Other") reply to this
-    same quiz (same header). That is a clarifying question or a worded attempt: a re-ask must
-    respond to it first, but a two-sentence clarification is enough."""
-    tur = (stop or {}).get("toolUseResult")
-    if not isinstance(tur, dict):
-        return None
-    headers = {str(q.get("header", "")).strip().lower() for q in qs}
-    for q in tur.get("questions") or []:
-        if str(q.get("header", "")).strip().lower() not in headers:
-            continue
-        reply = str((tur.get("answers") or {}).get(q.get("question", ""), ""))
-        labels = {str(o.get("label", "")) for o in q.get("options") or []}
-        if reply and reply not in labels and not all(p.strip() in labels for p in reply.split(",")):
-            return reply
-    return None
-
-
 def prepare_quiz(q: dict) -> dict:
     """Add "I don't know" if there's room, then shuffle the real options (IDK stays last)."""
     q = dict(q)
@@ -570,46 +481,6 @@ def hook() -> None:
     if event == "PreToolUse" and payload.get("tool_name") == QA_TOOL:
         tool_input = payload.get("tool_input") or {}
         qs = tool_input.get("questions") or []
-        # Gate: a check-quiz must come after the lesson text it checks, so the learner (and
-        # the log) have the material. Worded around the lesson, not around how it was drafted.
-        seen = lesson_since_learner(tpath, payload.get("tool_use_id", "")) if any(is_quiz(q) for q in qs) else None
-        prev = graded_answer(seen[1]) if seen is not None else None
-        if prev is not None and seen[2] < MIN_GRADING_CHARS:
-            header, reply, typed = prev
-            said = f' Their answer, in their own words: "{reply[:400]}".' if typed else f' They chose: "{reply[:200]}".'
-            sys.stdout.write(json.dumps({"hookSpecificOutput": {
-                "hookEventName": "PreToolUse", "permissionDecision": "deny",
-                "permissionDecisionReason": (
-                    f"Grading check: the learner answered {header}, and that answer hasn't been graded "
-                    f"in the lesson yet.{said} That answer is the learner's work, not yours. Grade it in "
-                    "your reply first (the callout: correct, incorrect or I don't know; the correct answer; "
-                    "and why, including anything in their reasoning that was off), then ask the next question."
-                    + NOT_TIMING)}}))
-            return
-        if any(needs_explanation(q) for q in qs):
-            if seen is not None:
-                n, stop, _ = seen
-                reply = open_question(stop, qs)
-                if reply is not None and n < MIN_FOLLOWUP_CHARS:
-                    reason = (
-                        "Lesson check: the learner's last reply to this quiz was typed text, not a choice, "
-                        f"and it hasn't been responded to yet (about {n} characters since). They wrote: "
-                        f'"{reply[:500]}". Respond to that in the lesson first (answer their question, or '
-                        "grade their worded attempt), then re-ask the quiz if it's still needed." + NOT_TIMING)
-                elif reply is None and n < MIN_EXPLANATION_CHARS:
-                    reason = (
-                        "Lesson check: this quiz checks material that isn't in the lesson yet "
-                        f"(about {n} characters of lesson text since the learner's last reply). "
-                        "Add the explanation or worked step for this node to the lesson message, "
-                        "then ask the quiz. For a question on prior knowledge, use the header "
-                        "'Probe N' instead." + NOT_TIMING)
-                else:
-                    reason = None
-                if reason:
-                    sys.stdout.write(json.dumps({"hookSpecificOutput": {
-                        "hookEventName": "PreToolUse", "permissionDecision": "deny",
-                        "permissionDecisionReason": reason}}))
-                    return
         if any(is_quiz(q) for q in qs):
             qs = [prepare_quiz(q) if is_quiz(q) else q for q in qs]
             out = {"hookSpecificOutput": {"hookEventName": "PreToolUse",
@@ -618,39 +489,6 @@ def hook() -> None:
     elif event == "PostToolUse" and payload.get("tool_name") == QA_TOOL:
         tid = payload.get("tool_use_id", "")
         pending["results"][tid] = payload.get("tool_response")
-        # After-the-fact lesson check. Before a quiz, the transcript usually doesn't hold the
-        # current message yet, so the gate above can't see it; after the answer, it does.
-        qs = (payload.get("tool_input") or {}).get("questions") or []
-        notes = []
-        if any(needs_explanation(q) for q in qs):
-            seen = lesson_since_learner(tpath, tid)
-            n, stop, _ = seen if seen is not None else (None, None, 0)
-            floor = MIN_FOLLOWUP_CHARS if open_question(stop, qs) is not None else MIN_EXPLANATION_CHARS
-            if n is not None and n < floor:
-                notes.append(
-                    "Lesson check: the message that asked this quiz had almost no lesson text "
-                    f"(about {n} characters), so the learner answered without the node's explanation "
-                    "in front of them, and the lesson log is missing it too. Start your next message by "
-                    "writing that node's explanation in the lesson, then grade the answer.")
-        if any(is_quiz(q) for q in qs):
-            # The answer arrives mid-turn, right after a tool call, which is exactly when the
-            # next step tends to go straight to another tool call with no lesson text. Say what
-            # the next message must contain, every time, not only after a miss.
-            mine = graded_answer({"toolUseResult": payload.get("tool_response")}) if isinstance(
-                payload.get("tool_response"), dict) else None
-            if mine is not None and mine[2]:
-                notes.append(
-                    f'The learner answered {mine[0]} in their own words: "{mine[1][:400]}". '
-                    "That is the learner's answer, not yours; grade it as theirs.")
-            notes.append(
-                "Next step: the learner has answered. Write the grading callout, then the next "
-                "node's lesson, as lesson text in your reply before any other tool call. Those "
-                "are what the learner reads (and what the lesson log records). If a lesson check "
-                "declines the next quiz, the lesson text is missing from the message: write it, "
-                "rather than assuming it is already above.")
-        if notes:
-            out = {"hookSpecificOutput": {"hookEventName": "PostToolUse",
-                                          "additionalContext": "\n\n".join(notes)}}
     elif event == "UserPromptSubmit":
         pending["prompt"] = payload.get("prompt") or payload.get("user_prompt")
     elif event == "Stop":

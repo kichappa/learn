@@ -116,7 +116,7 @@ The profile also records how you learn, pace calibration, hypotheses to test nex
 
 - **The quiz shuffle** relies on Claude Code applying a PreToolUse hook's `updatedInput` to `AskUserQuestion`. If a quiz shows options in the order Claude wrote them, with no "I don't know", it isn't being applied.
 - **The log** misses any assistant text that Claude Code doesn't write to the session transcript. The final reply of each turn is always captured. When a quiz is asked or answered, the transcript can lag the screen by a few seconds, so the log rebuilds once more about 4 s later.
-- **Lesson checks.** A `Quiz N` question checks something just taught, so a hook requires lesson text before it (`Probe N` questions, which test prior knowledge, are exempt). Before the quiz, the current message usually isn't in the transcript yet, so that check rarely fires. The dependable check runs after the answer: if the quiz's message had almost no lesson text, Claude is told to write the node's explanation first in its next message. The check counts characters, so it catches missing explanations, not thin ones.
+- **Explanations and quizzes take separate turns.** The teach skill writes each explanation, and each grading, in a reply that ends the turn, and asks the next quiz only after you reply. That costs you one short reply per question. When an explanation and a quiz shared a turn, the explanation repeatedly never made it into a reply, so you'd get a quiz on material you never saw. An earlier version tried to catch this with hook checks; separating the turns is what fixed it.
 - **Tested on Windows only** (Git Bash shell for hooks). The scripts are written to be cross-platform, but macOS and Linux are untested.
 
 ## License
