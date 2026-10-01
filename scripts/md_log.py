@@ -144,11 +144,17 @@ def ungraded_answer(transcript: Path | None, tool_use_id: str) -> tuple[str, str
 
 
 def graded_turn_ended(transcript: Path | None, last_text: str) -> str | None:
+    """See graded_turn_status; returns the answer uuid only when a nudge is due."""
+    status, uuid = graded_turn_status(transcript, last_text)
+    return uuid if status == "nudge" else None
+
+
+def graded_turn_status(transcript: Path | None, last_text: str) -> tuple[str, str | None]:
     """The uuid of the learner's last quiz answer, if the turn now ending has written a grading
     for it (reply text since the answer) and asked no question since. None during discussion:
     when the learner's last input was a typed message, the next question waits for them."""
     if not transcript or not transcript.is_file():
-        return None
+        return "no transcript", None
     written, declined = 0, set()
     for e in reversed(active_chain(load_entries(transcript))):
         content = e.get("message", {}).get("content")
@@ -157,7 +163,7 @@ def graded_turn_ended(transcript: Path | None, last_text: str) -> str | None:
                 if not isinstance(b, dict):
                     continue
                 if b.get("type") == "tool_use" and b.get("name") == QA_TOOL and b.get("id") not in declined:
-                    return None  # a question is already out (declined ones never reached the learner)
+                    return "question out", None  # declined ones never reached the learner
                 if b.get("type") == "text":
                     written += len(b.get("text", "").strip())
             continue
@@ -169,13 +175,13 @@ def graded_turn_ended(transcript: Path | None, last_text: str) -> str | None:
         tur = e.get("toolUseResult")
         if isinstance(tur, dict) and "answers" in tur:
             if not any(is_quiz(q) for q in tur.get("questions") or []):
-                return None
-            # The transcript can lag the final message slightly; the Stop payload carries it
+                return "plain question", None
+            # The transcript can lag the final message slightly; the Stop payload may carry it
             written = max(written, len(last_text.strip()))
-            return e.get("uuid") if written >= MIN_GRADING_CHARS else None
+            return ("nudge", e.get("uuid")) if written >= MIN_GRADING_CHARS else ("no reply yet", e.get("uuid"))
         if user_prompt(e):
-            return None
-    return None
+            return "discussion", None
+    return "nothing", None
 
 
 def prepare_quiz(q: dict) -> dict:
@@ -593,8 +599,22 @@ def hook() -> None:
         pending["prompt"] = payload.get("prompt") or payload.get("user_prompt")
     elif event == "Stop":
         pending["last_assistant"] = payload.get("last_assistant_message")
-        answer = None if payload.get("stop_hook_active") else graded_turn_ended(
-            tpath, payload.get("last_assistant_message") or "")
+        last_text = payload.get("last_assistant_message") or ""
+        status, answer = ("already continuing", None) if payload.get("stop_hook_active") else \
+            graded_turn_status(tpath, last_text)
+        waited = 0
+        while status == "no reply yet" and waited < 15:  # the reply may not be in the file yet
+            time.sleep(0.2)
+            waited += 1
+            status, answer = graded_turn_status(tpath, last_text)
+        if status != "nudge":
+            answer = None
+        try:  # one line per decision, for diagnosing the rhythm later
+            with open(LINKS_FILE.parent / "nudge.log", "a", encoding="utf-8") as f:
+                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {sid[:8]} {status} waited={waited * 0.2:.1f}s "
+                        f"last_text={len(last_text)}ch\n")
+        except OSError:
+            pass
         nudges_file = LINKS_FILE.parent / "nudges.json"
         try:
             nudged = json.loads(nudges_file.read_text(encoding="utf-8"))
