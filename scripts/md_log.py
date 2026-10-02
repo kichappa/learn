@@ -658,8 +658,10 @@ def hook() -> None:
     elif event == "Stop":
         pending["last_assistant"] = payload.get("last_assistant_message")
         last_text = payload.get("last_assistant_message") or ""
-        status, answer = ("already continuing", None) if payload.get("stop_hook_active") else \
-            graded_turn_status(tpath, last_text)
+        # No stop_hook_active short-cut: after a nudge, the next question is asked and answered
+        # inside the same continued turn, so that flag would mute every second nudge. The
+        # once-per-answer record (nudges.json) is what prevents loops.
+        status, answer = graded_turn_status(tpath, last_text)
         waited = 0
         while status == "no reply yet" and waited < 15:  # the reply may not be in the file yet
             time.sleep(0.2)
