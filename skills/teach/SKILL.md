@@ -139,6 +139,7 @@ Upstream had a dedicated `quiz` tool that graded answers itself. Here a quiz is 
    - **Define every symbol** in the question, with its units where it has them.
    - **Give the setup concretely:** a specific example, or a two-or-three-line ASCII sketch for anything spatial.
    - **Keep the math readable raw.** The popup doesn't render LaTeX, so write it with Unicode (σ_d, s², √k, ≈) rather than `$\sigma_d$`.
+   - **Give the log a LaTeX twin.** When the question has math, also pass the same question written in proper LaTeX (inline `$…$`, display `$$…$$` on their own lines) as the call's top-level `metadata: {"source": "latex:<the question in LaTeX>"}`. The popup ignores it; the md-log shows it in place of the Unicode question. Twin the question only, not the options, and keep the wording identical apart from the math.
    - **Put the context in the question, never in the options.** The options stay bare, parallel claims (see the construction procedure below).
 5. **Fix the answer key before you call.** Decide the correct label(s) and the explanation first. Never regrade after seeing the answer.
 6. **Refer to options by label, never by number.** The learner saw a shuffled order you don't know.

@@ -91,6 +91,20 @@ WIKI_EMBED = re.compile(r"!\[\[([^\]|]+?\.(?:png|jpe?g|gif|svg|webp))(?:\|(\d+))
 
 # ── quiz helpers ─────────────────────────────────────────────────────────────
 
+# Log-only LaTeX twin of a quiz question. The popup can't render LaTeX, so a call may carry
+# metadata.source = "latex:<question in LaTeX>"; the log shows that instead of the Unicode
+# question. Keyed by the question text, which the shuffle leaves untouched.
+LATEX_PREFIX = "latex:"
+LATEX: dict[str, str] = {}
+
+
+def note_latex(tool_input: dict) -> None:
+    src = str(((tool_input or {}).get("metadata") or {}).get("source") or "")
+    qs = (tool_input or {}).get("questions") or []
+    if src.startswith(LATEX_PREFIX) and qs:
+        LATEX[str(qs[0].get("question", ""))] = src[len(LATEX_PREFIX):].strip()
+
+
 def is_quiz(q: dict) -> bool:
     """Graded question: "Quiz N" checks taught material, "Probe N" tests prior knowledge."""
     return str(q.get("header", "")).strip().lower().startswith(("quiz", "probe"))
@@ -381,7 +395,8 @@ def question_title(q: dict) -> str:
 
 def question_block(q: dict) -> str:
     quiz = is_quiz(q)
-    body = str(q.get("question", "")).split("\n")
+    qtext = str(q.get("question", ""))
+    body = LATEX.get(qtext, qtext).split("\n")
     opts = q.get("options") or []
     if opts:
         body.append("")
@@ -472,6 +487,7 @@ def build_blocks(chain: list[dict], log_dir: Path, pending: dict) -> list[str]:
                 if b.get("type") == "text" and b.get("text", "").strip():
                     text_buf.append(b["text"].strip())
                 elif b.get("type") == "tool_use" and b.get("name") == QA_TOOL:
+                    note_latex(b.get("input") or {})
                     qa_calls[b.get("id")] = (b.get("input") or {}).get("questions") or []
                 elif b.get("type") == "tool_use" and b.get("name") == "Skill":
                     flush()
@@ -605,6 +621,7 @@ def hook() -> None:
 
     if event == "PreToolUse" and payload.get("tool_name") == QA_TOOL:
         tool_input = payload.get("tool_input") or {}
+        note_latex(tool_input)
         qs = tool_input.get("questions") or []
         # Grading check: a popup asked straight after the learner answered a quiz must come
         # after the grading of that answer, written as a reply (teach skill, quiz rule 0).
