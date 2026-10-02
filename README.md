@@ -31,7 +31,8 @@ A plugin can't ship environment variables or permission rules, so add these to `
 {
   "env": {
     "LEARN_PROFILES_DIR": "C:/Users/you/Dropbox/learner-profiles",
-    "LEARN_PREVIEW_TAIL": "on"
+    "LEARN_PREVIEW_TAIL": "on",
+    "LEARN_MD_LOG": "on"
   },
   "permissions": {
     "allow": [
@@ -46,6 +47,7 @@ A plugin can't ship environment variables or permission rules, so add these to `
 ```
 
 - **`LEARN_PROFILES_DIR`:** where learner profiles live. The default is `~/.claude/learner-profiles`. Point it at a synced folder to share profiles between computers.
+- **`LEARN_MD_LOG`:** `on` by default: each `/learn:teach` session is mirrored to `lessons/<topic>.md`. Set it to `off` to link sessions only by hand with `/learn:md-log`.
 - **`LEARN_PREVIEW_TAIL`:** `on` by default. Set it to `off` to keep the plugin from installing its VS Code preview extension, and to remove it if it's already installed (see below).
 - **The allow rules:** let the diagram makers, the session logger and the profile script run, and let Claude read and edit your profiles, all without prompting. Match the `Read`/`Edit` paths to your `LEARN_PROFILES_DIR`.
 
@@ -65,7 +67,7 @@ At each session start, the plugin installs or updates it through VS Code's `code
 |---|---|
 | `/learn:teach @<learner> <topic>` | Teach a topic. Without `@name` it asks who's learning, and creates a profile on first use. |
 | `/learn:reassess @<learner> [topic]` | Re-measure a profile that has drifted. It probes blind to the recorded levels, then compares old against new. |
-| `/learn:md-log lessons/<topic>.md` | Mirror the session into a markdown file that renders LaTeX, mermaid, images and quizzes (Obsidian, or VS Code's preview with `bierner.markdown-mermaid`). `/learn:md-log off` stops. To continue a lesson in a new session, run it with the same file: sessions are appended in order, never overwritten. |
+| `/learn:md-log lessons/<topic>.md` | Mirror the session into a markdown file that renders LaTeX, mermaid, images and quizzes (Obsidian, or VS Code's preview with `bierner.markdown-mermaid`). `/learn:md-log off` stops. **`/learn:teach` links this automatically** to `lessons/<topic>.md`, named from the topic you type, so the same topic in a new session appends to the same file. Set `LEARN_MD_LOG=off` in your settings' `env` to turn that off; `/learn:md-log` still works by hand. |
 
 The `teach` skill also triggers on its own whenever Claude explains something. Diagrams happen automatically: the teacher calls `visualize` when a picture helps, and PNGs land in `<project>/lessons/viz/`.
 

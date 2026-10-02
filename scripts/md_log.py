@@ -184,6 +184,43 @@ def graded_turn_status(transcript: Path | None, last_text: str) -> tuple[str, st
     return "nothing", None
 
 
+TEACH_COMMAND = re.compile(r"\s*/(?:learn:)?teach\b(.*)", re.S)
+
+
+def lesson_slug(args: str) -> str:
+    """A short file name from the /teach topic: '@kishore Kalman filters' -> 'kalman-filters'.
+    If the topic points at a file ('@docs/lattice_fingerprint.tex'), its name wins, so a lesson
+    on the same document keeps landing in the same log."""
+    text = PASTED.sub(" ", args)
+    files = re.findall(r"[\w.\-]+\.[A-Za-z0-9]{1,5}(?=[\s\"']|$)", re.sub(r"[\\/]", " ", text))
+    if files:
+        stem = re.sub(r"[^a-z0-9_\-]+", "-", files[0].rsplit(".", 1)[0].lower()).strip("-")
+        if stem:
+            return stem[:50]
+    text = re.sub(r"@\S+", " ", text)                     # the learner
+    text = re.sub(r"[A-Za-z]:[\\/]\S+|\S*[\\/]\S+", " ", text)  # paths
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    stop = {"the", "a", "an", "and", "of", "in", "to", "for", "on", "with", "me", "about", "how", "what", "why"}
+    words = [w for w in words if w not in stop][:6]
+    return "-".join(words)[:50].strip("-") or f"lesson-{time.strftime('%Y-%m-%d')}"
+
+
+def autolink(sid: str, prompt: str) -> str | None:
+    """Link a /teach session to lessons/<topic>.md, unless it's linked already or the switch
+    LEARN_MD_LOG is off. The same topic in a new session reuses the file (sessions append)."""
+    m = TEACH_COMMAND.match(prompt or "")
+    if not m or not sid or os.environ.get("LEARN_MD_LOG", "on").strip().lower() in {"off", "0", "false", "no"}:
+        return None
+    links = load_links()
+    if sid in links:
+        return None
+    log = PROJECT / "lessons" / f"{lesson_slug(m.group(1))}.md"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    links[sid] = log.relative_to(PROJECT).as_posix()
+    save_links(links)
+    return links[sid]
+
+
 def prepare_quiz(q: dict) -> dict:
     """Add "I don't know" if there's room, then shuffle the real options (IDK stays last)."""
     q = dict(q)
@@ -597,6 +634,10 @@ def hook() -> None:
         pending["results"][tid] = payload.get("tool_response")
     elif event == "UserPromptSubmit":
         pending["prompt"] = payload.get("prompt") or payload.get("user_prompt")
+        linked = autolink(sid, pending["prompt"] or "")
+        if linked:  # UserPromptSubmit stdout reaches Claude as context
+            print(f"Lesson log: this session is mirrored to {linked} (auto-linked by the learn plugin; "
+                  "it renders math, diagrams and quizzes). Tell the learner the path once.")
     elif event == "Stop":
         pending["last_assistant"] = payload.get("last_assistant_message")
         last_text = payload.get("last_assistant_message") or ""

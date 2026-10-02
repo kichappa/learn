@@ -284,7 +284,7 @@ Run this when the goal node is reached or the learner wants to stop:
 
 ## Formatting — math renders as LaTeX
 
-The terminal shows LaTeX, mermaid and images as raw text. The session is meant to be read in the **md-log** file (`/learn:md-log lessons/<topic>.md`), which renders all three in Obsidian or VS Code's markdown preview. If the session isn't linked yet, suggest that command once at the start. Write for that rendered view. Whenever math notation is involved — explanations, questions, quiz options and explanations, anything — write it in LaTeX instead of plain-text approximations:
+The terminal shows LaTeX, mermaid and images as raw text. The session is meant to be read in the **md-log** file, which renders all three in Obsidian or VS Code's markdown preview. A `/learn:teach` session is linked to `lessons/<topic>.md` automatically, and a note at the start names the file: tell the learner the path once. If teaching started some other way and there's no such note, suggest `/learn:md-log lessons/<topic>.md` once at the start. Write for that rendered view. Whenever math notation is involved — explanations, questions, quiz options and explanations, anything — write it in LaTeX instead of plain-text approximations:
 
 - Inline math: `$f(x)$`
 - Centered display math: `$$` fenced on its own lines, e.g. `$$\n f(x) \n$$`
