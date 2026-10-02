@@ -91,18 +91,35 @@ WIKI_EMBED = re.compile(r"!\[\[([^\]|]+?\.(?:png|jpe?g|gif|svg|webp))(?:\|(\d+))
 
 # ── quiz helpers ─────────────────────────────────────────────────────────────
 
-# Log-only LaTeX twin of a quiz question. The popup can't render LaTeX, so a call may carry
-# metadata.source = "latex:<question in LaTeX>"; the log shows that instead of the Unicode
-# question. Keyed by the question text, which the shuffle leaves untouched.
+# Log-only LaTeX twin of a quiz. The popup can't render LaTeX, so a call may carry
+#     metadata.source = "latex:<question in LaTeX>\n@@options\n<option 1 in LaTeX>\n<option 2>..."
+# and the log shows those instead of the Unicode text. The "@@options" part is optional; its
+# lines follow the order the options were written in (the session file keeps that order, the
+# popup's shuffle doesn't change it), and if their count doesn't match they're ignored.
+# Without a twin, everything renders as the popup shows it, so non-math lessons need nothing.
 LATEX_PREFIX = "latex:"
+OPTIONS_MARK = "@@options"
 LATEX: dict[str, str] = {}
+LATEX_OPTS: dict[str, dict[str, str]] = {}
 
 
 def note_latex(tool_input: dict) -> None:
     src = str(((tool_input or {}).get("metadata") or {}).get("source") or "")
     qs = (tool_input or {}).get("questions") or []
-    if src.startswith(LATEX_PREFIX) and qs:
-        LATEX[str(qs[0].get("question", ""))] = src[len(LATEX_PREFIX):].strip()
+    if not (src.startswith(LATEX_PREFIX) and qs):
+        return
+    question, _, options = src[len(LATEX_PREFIX):].partition(OPTIONS_MARK)
+    qtext = str(qs[0].get("question", ""))
+    if question.strip():
+        LATEX[qtext] = question.strip()
+    lines = [ln.strip() for ln in options.strip("\n").split("\n")] if options.strip() else []
+    labels = [str(o.get("label", "")) for o in qs[0].get("options") or []]
+    if lines and len(lines) == len(labels):
+        LATEX_OPTS[qtext] = dict(zip(labels, lines))
+
+
+def option_text(q: dict, label: str) -> str:
+    return LATEX_OPTS.get(str(q.get("question", "")), {}).get(label, label)
 
 
 def is_quiz(q: dict) -> bool:
@@ -404,7 +421,7 @@ def question_block(q: dict) -> str:
             label, desc = str(o.get("label", "")), str(o.get("description", "") or "").strip()
             # Quiz descriptions of the IDK option are boilerplate; real descriptions stay
             show_desc = desc and not (quiz and DONT_KNOW_RE.match(label))
-            body.append(f"{i}. {label}" + (f" — {desc}" if show_desc else ""))
+            body.append(f"{i}. {option_text(q, label)}" + (f" — {desc}" if show_desc else ""))
     if q.get("multiSelect"):
         body.append("")
         body.append("*Select all that apply.*")
@@ -426,7 +443,7 @@ def answer_block(q: dict, answer: str | None, note: str | None) -> str:
         title, kind, lines = "🤷 I don't know", "question", []
     elif picked:
         title, kind = "✍️ Your answer", "example"
-        lines = [f"**{labels.index(p) + 1}.** {p}" for p in picked]
+        lines = [f"**{labels.index(p) + 1}.** {option_text(q, p)}" for p in picked]
     else:
         title, kind = "✍️ Your answer, in your words", "example"
         lines = answer.split("\n")
